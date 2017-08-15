@@ -1,0 +1,93 @@
+Description: Example stack that demo's how to use cf-shim to add resources from boto3
+Resources:
+    LambdaRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+            AssumeRolePolicyDocument:
+                Statement:
+                - 
+                    Effect: Allow
+                    Principal:
+                        Service:
+                            - "lambda.amazonaws.com"
+                    Action: ["sts:AssumeRole"]
+            Policies:
+            -
+                PolicyName: "ShimLambdaRole"
+                PolicyDocument:
+                    Statement:
+                    - 
+                        Effect: Allow
+                        Action: ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"]
+                        Resource: ["arn:aws:logs:*:*:*"]
+                    -  # This allows the shim to access EVERYTHING. You probably don't want to run this in a production AWS account
+                        Effect: Allow
+                        Action: ["*"]
+                        Resource: ["*"]
+    ShimLambda:
+        Type: "AWS::Lambda::Function"
+        Properties: 
+            Handler: "index.handler"
+            Role: !GetAtt LambdaRole.Arn
+            Runtime: "python3.6"
+            Timeout: "300"
+            Code: 
+                ZipFile: |
+                    import cfnresponse
+                    import sys
+                    from subprocess import Popen, PIPE
+
+                    sys.path.insert(0,"/tmp/")
+                    
+                    proc = Popen(["pip", "install", "boto3","-t","/tmp/"], stdout=PIPE, stderr=PIPE)
+                    out, err = proc.communicate()
+                    exitcode = proc.returncode
+                    if exitcode != 0:
+                        raise ImportError("Issue installing boto3. Check logs")
+                    print([exitcode, out, err])
+                    import boto3
+
+                    def handler(event, context):
+                        try:
+                            print("Event Data:")
+                            print(event) # print out the event so we can debug easily
+                            client = boto3.client(event['ResourceProperties']['Service']) # TODO add region support
+                            
+                            try: #just return back if no function defined
+                                method_name = event['ResourceProperties'][event['RequestType']]
+                            except IndexError:
+                                cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, event['LogicalResourceId'])
+
+                            method = getattr(client, method_name)
+
+                            try:
+                                args = event['ResourceProperties'][event['RequestType']+"Data"]
+                            except IndexError:
+                                args = {}
+                            response = method(**args)
+                            print("Response Data:")
+                            print(response)
+
+                            print("Sending success")
+                            cfnresponse.send(event, context, cfnresponse.SUCCESS, response, event['LogicalResourceId'])
+                            print("All Done")
+                        except:
+                            cfnresponse.send(event, context, cfnresponse.FAILED, {}, event['LogicalResourceId'])
+                            raise
+
+    CustomSNS: # in this example we will create an SNS topic without using CloudFormation prematives
+        Type: Custom::CFShim
+        DependsOn: [ShimLambda]
+        Properties:
+            ServiceToken: !GetAtt ShimLambda.Arn
+            Region: "us-east-1" # in case you need a resource in another region
+            Service: "sns"
+            Create: "create_topic" # http://boto3.readthedocs.io/en/latest/reference/services/sns.html#SNS.Client.create_topic
+            # Delete: "delete_topic"
+            # Update: "set_topic_attributes"
+            CreateData: 
+                Name: "TestTopicName"
+            # DeleteData:
+            #     Arn: "TBA"
+            # UpdateData:
+            #     TBA: TBA
