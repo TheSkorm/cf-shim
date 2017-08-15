@@ -24,6 +24,9 @@ Resources:
                         Effect: Allow
                         Action: ["*"]
                         Resource: ["*"]
+    ################################################################
+    # INCLUDE THIS RESOURCE HERE (plus a lambdarole such as above) #
+    ################################################################
     ShimLambda:
         Type: "AWS::Lambda::Function"
         Properties: 
@@ -48,46 +51,89 @@ Resources:
                     import boto3
 
                     def handler(event, context):
-                        try:
+                        try: # giant try catch so that we can report to CF as soon as a failure occurs
                             print("Event Data:")
                             print(event) # print out the event so we can debug easily
-                            client = boto3.client(event['ResourceProperties']['Service']) # TODO add region support
+
+                            try:
+                                client = boto3.client(event['ResourceProperties']['Service'], region_name=event['ResourceProperties']['Region'])
+                            except KeyError:
+                                client = boto3.client(event['ResourceProperties']['Service']) 
                             
                             try: #just return back if no function defined
                                 method_name = event['ResourceProperties'][event['RequestType']]
-                            except IndexError:
+                            except KeyError:
                                 cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, event['LogicalResourceId'])
 
                             method = getattr(client, method_name)
 
                             try:
                                 args = event['ResourceProperties'][event['RequestType']+"Data"]
-                            except IndexError:
+                            except KeyError:
                                 args = {}
+
+                            for key in args:
+                                if args[key] == "$PhysicalResourceId$":
+                                    args[key] = event['PhysicalResourceId']
+
                             response = method(**args)
                             print("Response Data:")
                             print(response)
 
+                            try: #use existing physical_resource_id if exists
+                                physical_resource_id =event['PhysicalResourceId']
+                            except KeyError:
+                                try:
+                                    physical_resource_id = response[event['ResourceProperties']['PhysicalResourceId']]
+                                except KeyError:
+                                    physical_resource_id = event['LogicalResourceId']
+
                             print("Sending success")
-                            cfnresponse.send(event, context, cfnresponse.SUCCESS, response, event['LogicalResourceId'])
+                            cfnresponse.send(event, context, cfnresponse.SUCCESS, response, physical_resource_id)
                             print("All Done")
                         except:
                             cfnresponse.send(event, context, cfnresponse.FAILED, {}, event['LogicalResourceId'])
                             raise
+
+    #################
+    # Example usage #
+    #################
 
     CustomSNS: # in this example we will create an SNS topic without using CloudFormation prematives
         Type: Custom::CFShim
         DependsOn: [ShimLambda]
         Properties:
             ServiceToken: !GetAtt ShimLambda.Arn
-            Region: "us-east-1" # in case you need a resource in another region
             Service: "sns"
             Create: "create_topic" # http://boto3.readthedocs.io/en/latest/reference/services/sns.html#SNS.Client.create_topic
-            # Delete: "delete_topic"
-            # Update: "set_topic_attributes"
+            PhysicalResourceId: "TopicArn" #this is the variable from the boto3 method response that sets the physicalresourceid
+            Delete: "delete_topic"
+            Update: "set_topic_attributes"
             CreateData: 
-                Name: "TestTopicName"
-            # DeleteData:
-            #     Arn: "TBA"
-            # UpdateData:
-            #     TBA: TBA
+                Name: "TestTopicNameTest"
+            DeleteData:
+                TopicArn: "$PhysicalResourceId$"
+            UpdateData:
+                TopicArn: "$PhysicalResourceId$"
+                AttributeName: "DisplayName"
+                AttributeValue: "TestUpdate4"
+
+                
+    CustomACM: # in this example we will create an SNS topic without using CloudFormation prematives
+        Type: Custom::CFShim
+        DependsOn: [ShimLambda]
+        Properties:
+            ServiceToken: !GetAtt ShimLambda.Arn
+            Region: "us-east-1" # in case you need a resource in another region
+            Service: "acm"
+            Create: "request_certificate"  # http://boto3.readthedocs.io/en/latest/reference/services/acm.html#ACM.Client.request_certificate
+            PhysicalResourceId: "CertificateArn"
+            Delete: "delete_certificate"
+            CreateData: 
+                DomainName: "test.mwheeler.org"
+                DomainValidationOptions: 
+                - 
+                    DomainName: test.mwheeler.org
+                    ValidationDomain: mwheeler.org
+            DeleteData:
+                CertificateArn: "$PhysicalResourceId$"
