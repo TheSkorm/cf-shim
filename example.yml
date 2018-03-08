@@ -39,7 +39,16 @@ Resources:
                     import cfnresponse
                     import sys
                     from subprocess import Popen, PIPE
+                    from datetime import date, datetime
+                    from functools import reduce
+                    import operator
+                    import json
+                    def json_serial(obj):
+                        """JSON serializer for objects not serializable by default json code"""
 
+                        if isinstance(obj, (datetime, date)):
+                            return obj.isoformat()
+                        raise TypeError ("Type %s not serializable" % type(obj))
                     sys.path.insert(0,"/tmp/")
                     
                     proc = Popen(["pip", "install", "boto3","-t","/tmp/"], stdout=PIPE, stderr=PIPE)
@@ -72,19 +81,22 @@ Resources:
                             except KeyError:
                                 args = {}
 
-                            for key in args:
-                                if args[key] == "$PhysicalResourceId$":
-                                    args[key] = event['PhysicalResourceId']
-
+                            try:
+                                # this is hacky but probably works fine replaces "$PhysicalResourceId$" in any section of the object with our recorded physicalresourceid
+                                args = json.loads(json.dumps(args, default=json_serial).replace("$PhysicalResourceId$",event['PhysicalResourceId']))
+                            except KeyError:
+                                pass
+                                
                             response = method(**args)
                             print("Response Data:")
                             print(response)
+                            response = json.loads(json.dumps(response, default=json_serial))
 
                             try: #use existing physical_resource_id if exists
                                 physical_resource_id =event['PhysicalResourceId']
                             except KeyError:
                                 try:
-                                    physical_resource_id = response[event['ResourceProperties']['PhysicalResourceId']]
+                                    physical_resource_id = reduce(operator.getitem, event['ResourceProperties']['PhysicalResourceId'].split("."), response)
                                 except KeyError:
                                     physical_resource_id = event['LogicalResourceId']
 
@@ -137,3 +149,25 @@ Resources:
                     ValidationDomain: mwheeler.org
             DeleteData:
                 CertificateArn: "$PhysicalResourceId$"
+
+    SSMVPCEndpoint: 
+        Type: Custom::SSM_VPC_CFShim
+        DependsOn: [ShimLambda]
+        Properties:
+            ServiceToken: !GetAtt ShimLambda.Arn
+            Service: "ec2"
+            Create: "create_vpc_endpoint"  # http://boto3.readthedocs.io/en/latest/reference/services/ec2.html#EC2.Client.create_vpc_endpoint
+            PhysicalResourceId: "VpcEndpoint.VpcEndpointId"
+            Delete: "delete_vpc_endpoints"
+            CreateData: 
+                VpcEndpointType: "Interface"
+                VpcId: "vpc-75fffc11"
+                ServiceName: "com.amazonaws.ap-southeast-1.ssm"
+                SubnetIds: ["subnet-52538335"]
+                SecurityGroupIds: ["sg-5907bc3f"]
+                # PrivateDnsEnabled: true
+            DeleteData:
+                VpcEndpointIds:
+                    - "$PhysicalResourceId$"
+            #     CertificateArn: "$PhysicalResourceId$"
+            #add in delete_vpc_endpoints for delete / cleanup
