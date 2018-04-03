@@ -170,3 +170,21 @@ Resources:
                     - "$PhysicalResourceId$"
             #     CertificateArn: "$PhysicalResourceId$"
             #add in delete_vpc_endpoints for delete / cleanup
+            
+    # Example using to enable backups on a dynabodb table
+    TableBackups:
+        Type: Custom::CFShim
+        DependsOn: [ShimLambda]
+        Properties:
+            ServiceToken: !GetAtt ShimLambda.Arn
+            Service: "dynamodb"
+            Create: "update_continuous_backups" # http://boto3.readthedocs.io/en/latest/reference/services/sns.html#SNS.Client.create_topic
+            Delete: "update_continuous_backups"
+            CreateData: 
+                TableName: !Ref DynamoDBTable
+                PointInTimeRecoverySpecification:
+                    PointInTimeRecoveryEnabled: booltrue
+            DeleteData:
+                TableName: !Ref DynamoDBTable
+                PointInTimeRecoverySpecification:
+                    PointInTimeRecoveryEnabled: boolfalse
