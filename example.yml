@@ -42,28 +42,29 @@ Resources:
                     from datetime import date, datetime
                     from functools import reduce
                     import operator
+                    import importlib
                     import json
                     def json_serial(obj):
                         """JSON serializer for objects not serializable by default json code"""
-
                         if isinstance(obj, (datetime, date)):
                             return obj.isoformat()
                         raise TypeError ("Type %s not serializable" % type(obj))
                     sys.path.insert(0,"/tmp/")
                     
-                    proc = Popen(["pip", "install", "boto3","-t","/tmp/"], stdout=PIPE, stderr=PIPE)
+                    proc = Popen(["pip", "install", "boto3","botocore","-t","/tmp/"], stdout=PIPE, stderr=PIPE)
                     out, err = proc.communicate()
                     exitcode = proc.returncode
                     if exitcode != 0:
                         raise ImportError("Issue installing boto3. Check logs")
                     print([exitcode, out, err])
+                    import botocore
+                    importlib.reload(botocore)
                     import boto3
-
+                    importlib.reload(boto3)
                     def handler(event, context):
                         try: # giant try catch so that we can report to CF as soon as a failure occurs
                             print("Event Data:")
                             print(event) # print out the event so we can debug easily
-
                             try:
                                 client = boto3.client(event['ResourceProperties']['Service'], region_name=event['ResourceProperties']['Region'])
                             except KeyError:
@@ -73,25 +74,25 @@ Resources:
                                 method_name = event['ResourceProperties'][event['RequestType']]
                             except KeyError:
                                 cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, event['LogicalResourceId'])
-
                             method = getattr(client, method_name)
-
                             try:
                                 args = event['ResourceProperties'][event['RequestType']+"Data"]
                             except KeyError:
                                 args = {}
-
                             try:
                                 # this is hacky but probably works fine replaces "$PhysicalResourceId$" in any section of the object with our recorded physicalresourceid
-                                args = json.loads(json.dumps(args, default=json_serial).replace("$PhysicalResourceId$",event['PhysicalResourceId']))
+                                args = json.loads(json.dumps(args, default=json_serial).replace("$PhysicalResourceId$",event['PhysicalResourceId']).replace("\"booltrue\"", "true").replace("\"boolfalse\"", "false"))
                             except KeyError:
+                                args = json.loads(json.dumps(args, default=json_serial).replace("\"booltrue\"", "true").replace("\"boolfalse\"", "false"))
                                 pass
                                 
                             response = method(**args)
                             print("Response Data:")
                             print(response)
-                            response = json.loads(json.dumps(response, default=json_serial))
-
+                            try:
+                              response = json.loads(json.dumps(response, default=json_serial))
+                            except:
+                              pass
                             try: #use existing physical_resource_id if exists
                                 physical_resource_id =event['PhysicalResourceId']
                             except KeyError:
@@ -99,14 +100,12 @@ Resources:
                                     physical_resource_id = reduce(operator.getitem, event['ResourceProperties']['PhysicalResourceId'].split("."), response)
                                 except KeyError:
                                     physical_resource_id = event['LogicalResourceId']
-
                             print("Sending success")
                             cfnresponse.send(event, context, cfnresponse.SUCCESS, response, physical_resource_id)
                             print("All Done")
                         except:
                             cfnresponse.send(event, context, cfnresponse.FAILED, {}, event['LogicalResourceId'])
                             raise
-
     #################
     # Example usage #
     #################
